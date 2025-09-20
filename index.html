@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orange Run: The Sign Adventure</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            font-family: 'Press Start 2P', cursive;
+            background: linear-gradient(180deg, #ff8c00, #ffae42, #ffd580);
+            touch-action: none; /* Prevents scrolling on touch devices */
+        }
+        
+        #game-container {
+            -webkit-tap-highlight-color: transparent; /* Disable tap highlight on iOS */
+        }
+
+        canvas {
+            background-color: #333;
+            display: block;
+            touch-action: none;
+            cursor: pointer;
+        }
+
+        .modal {
+            animation: fadeIn 0.3s ease-out;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        
+        .token {
+            animation: spin 1s linear infinite, hover 2s ease-in-out infinite alternate;
+        }
+
+        @keyframes spin {
+            from { transform: rotateY(0deg); }
+            to { transform: rotateY(360deg); }
+        }
+
+        @keyframes hover {
+            from { transform: translateY(-5px); }
+            to { transform: translateY(5px); }
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen overflow-hidden">
+
+    <div id="game-container" class="w-full max-w-4xl mx-auto p-4 text-center">
+        <h1 class="text-4xl md:text-5xl font-bold text-white mb-2" style="text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">Orange Run</h1>
+        <p class="text-white mb-4 text-lg">Collect SIGN Tokens!</p>
+        
+        <!-- Score Display -->
+        <div class="bg-black bg-opacity-50 text-white p-4 rounded-lg mb-4 text-2xl shadow-lg">
+            Score: <span id="score">0</span>
+        </div>
+
+        <!-- Game Canvas -->
+        <canvas id="gameCanvas" class="rounded-xl shadow-2xl mx-auto"></canvas>
+
+        <!-- Start/Game Over Modal -->
+        <div id="modal" class="absolute inset-0 bg-black bg-opacity-70 flex items-center justify-center">
+            <div class="modal-content bg-orange-500 p-8 rounded-2xl shadow-lg text-white text-center w-11/12 max-w-md">
+                <h2 id="modal-title" class="text-4xl mb-4">Welcome!</h2>
+                <p id="modal-text" class="mb-6 text-lg">Press space or tap to jump. Avoid the obstacles and collect the spinning tokens!</p>
+                <button id="startGameBtn" class="bg-white text-orange-600 font-bold py-3 px-8 rounded-full text-2xl hover:bg-orange-100 transition-transform transform hover:scale-105 shadow-md">
+                    Start Game
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const modal = document.getElementById('modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalText = document.getElementById('modal-text');
+        const startGameBtn = document.getElementById('startGameBtn');
+        const gameContainer = document.getElementById('game-container');
+
+        // --- Game Configuration ---
+        const WINNING_SCORE = 50;
+        let score = 0;
+        let gameSpeed = 3;
+        let gameFrame = 0;
+        let isGameOver = true;
+        
+        // Canvas sizing
+        let canvasWidth = Math.min(window.innerWidth * 0.9, 800);
+        let canvasHeight = 450;
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        window.addEventListener('resize', () => {
+            canvasWidth = Math.min(window.innerWidth * 0.9, 800);
+            canvas.width = canvasWidth;
+        });
+
+
+        // --- Audio Setup (Tone.js) ---
+        let audioReady = false;
+        const synth = new Tone.Synth().toDestination();
+        const collectSound = new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 } }).toDestination();
+        const gameOverSound = new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.1, decay: 0.5, sustain: 0.1, release: 1 } }).toDestination();
+
+        const backgroundMusic = new Tone.Loop(time => {
+            synth.triggerAttackRelease("C4", "8n", time);
+            synth.triggerAttackRelease("G4", "8n", time + 0.5);
+            synth.triggerAttackRelease("E4", "8n", time + 1);
+        }, "1n").start(0);
+        backgroundMusic.humanize = true;
+
+
+        // --- Game Objects ---
+        
+        // Player (The Orange Builder)
+        const player = {
+            x: 50,
+            y: canvas.height - 110,
+            width: 50,
+            height: 60,
+            velocityY: 0,
+            gravity: 0.5,
+            jumpStrength: -12,
+            isJumping: false,
+            groundY: canvas.height - 110,
+            draw() {
+                // Character Body
+                ctx.fillStyle = '#ff8c00';
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                // Helmet
+                ctx.fillStyle = '#f9d71c'; // Golden yellow
+                ctx.fillRect(this.x, this.y, this.width, 15);
+
+                // Eyes
+                ctx.fillStyle = 'white';
+                ctx.fillRect(this.x + 10, this.y + 25, 10, 10);
+                ctx.fillRect(this.x + 30, this.y + 25, 10, 10);
+                ctx.fillStyle = 'black';
+                ctx.fillRect(this.x + 14, this.y + 29, 4, 4);
+                ctx.fillRect(this.x + 34, this.y + 29, 4, 4);
+            },
+            update() {
+                this.velocityY += this.gravity;
+                this.y += this.velocityY;
+                this.isJumping = this.y < this.groundY;
+
+                if (this.y > this.groundY) {
+                    this.y = this.groundY;
+                    this.velocityY = 0;
+                    this.isJumping = false;
+                }
+                this.draw();
+            },
+            jump() {
+                if (!this.isJumping && !isGameOver) {
+                    this.velocityY = this.jumpStrength;
+                    this.isJumping = true;
+                }
+            }
+        };
+
+        // Arrays for obstacles and tokens
+        let obstacles = [];
+        let tokens = [];
+
+        // Parallax Background
+        class Layer {
+            constructor(imageSrc, speedModifier, yOffset = 0, isPattern = false) {
+                this.x = 0;
+                this.y = yOffset;
+                this.width = isPattern ? 50 : 2400; // Small width for patterns
+                this.height = canvas.height;
+                this.image = new Image();
+                this.image.src = imageSrc;
+                this.speedModifier = speedModifier;
+                this.speed = gameSpeed * this.speedModifier;
+                this.isPattern = isPattern;
+                this.pattern = null;
+            }
+            update() {
+                this.speed = gameSpeed * this.speedModifier;
+                this.x -= this.speed;
+                if (this.x <= -this.width) {
+                    this.x = 0;
+                }
+            }
+            draw() {
+                 if (this.isPattern) {
+                    if (!this.pattern) {
+                       this.pattern = ctx.createPattern(this.image, 'repeat-x');
+                    }
+                    ctx.fillStyle = this.pattern;
+                    ctx.save();
+                    ctx.translate(this.x, 0);
+                    ctx.fillRect(0, this.y, canvas.width + this.width, this.height);
+                    ctx.restore();
+                } else {
+                    ctx.drawImage(this.image, this.x, this.y, this.width, this.height);
+                    ctx.drawImage(this.image, this.x + this.width, this.y, this.width, this.height);
+                }
+            }
+        }
+        
+        // --- Game Object Classes ---
+        class Obstacle {
+            constructor() {
+                this.width = 30 + Math.random() * 40;
+                this.height = 40 + Math.random() * 60;
+                this.x = canvas.width;
+                this.y = canvas.height - this.height - 50; // On the ground
+                this.type = Math.random() > 0.5 ? 'rock' : 'spike';
+            }
+            update() {
+                this.x -= gameSpeed;
+            }
+            draw() {
+                ctx.fillStyle = '#8B4513'; // SaddleBrown
+                if (this.type === 'spike') {
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y + this.height);
+                    ctx.lineTo(this.x + this.width / 2, this.y);
+                    ctx.lineTo(this.x + this.width, this.y + this.height);
+                    ctx.closePath();
+                    ctx.fill();
+                } else { // Rock
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                }
+            }
+        }
+
+        class Token {
+            constructor() {
+                this.size = 30;
+                this.x = canvas.width + Math.random() * 200;
+                this.y = canvas.height - 200 - Math.random() * 100;
+                this.angle = 0;
+                this.hoverOffset = Math.random() * 20;
+            }
+            update() {
+                this.x -= gameSpeed;
+                this.angle += 0.1; // For spinning effect
+            }
+            draw() {
+                const hoverY = this.y + Math.sin(gameFrame * 0.05 + this.hoverOffset) * 10;
+                ctx.save();
+                ctx.translate(this.x + this.size / 2, hoverY + this.size / 2);
+                ctx.scale(Math.cos(this.angle), 1); // Spinning effect
+                ctx.font = `${this.size}px 'Press Start 2P'`;
+                ctx.fillStyle = '#FFD700';
+                ctx.shadowColor = 'yellow';
+                ctx.shadowBlur = 15;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('S', 0, 0); // SIGN Token
+                ctx.restore();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+
+        // --- Game Logic Functions ---
+        
+        function handleObstacles() {
+            if (gameFrame % 90 === 0) { // Add new obstacle every 90 frames
+                obstacles.push(new Obstacle());
+            }
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].update();
+                obstacles[i].draw();
+                // Collision detection
+                if (
+                    player.x < obstacles[i].x + obstacles[i].width &&
+                    player.x + player.width > obstacles[i].x &&
+                    player.y < obstacles[i].y + obstacles[i].height &&
+                    player.y + player.height > obstacles[i].y
+                ) {
+                    endGame('Game Over!');
+                }
+                if (obstacles[i].x < -obstacles[i].width) {
+                    obstacles.splice(i, 1);
+                }
+            }
+        }
+
+        function handleTokens() {
+            if (gameFrame % 120 === 0) {
+                tokens.push(new Token());
+            }
+            for (let i = tokens.length - 1; i >= 0; i--) {
+                tokens[i].update();
+                tokens[i].draw();
+
+                 // Collision detection
+                if (
+                    player.x < tokens[i].x + tokens[i].size &&
+                    player.x + player.width > tokens[i].x &&
+                    player.y < tokens[i].y + tokens[i].size &&
+                    player.y + player.height > tokens[i].y
+                ) {
+                    tokens.splice(i, 1);
+                    score++;
+                    scoreEl.textContent = score;
+                    if(audioReady) collectSound.triggerAttackRelease('C6', '0.1s');
+                    if(score >= WINNING_SCORE){
+                        endGame("You Win!");
+                    }
+                }
+
+                if (tokens[i].x < -tokens[i].size) {
+                    tokens.splice(i, 1);
+                }
+            }
+        }
+        
+        function drawGround() {
+            ctx.fillStyle = '#6B4226'; // A dark brown for the ground
+            ctx.fillRect(0, canvas.height - 50, canvas.width, 50);
+        }
+
+        // --- Main Animation Loop ---
+        function animate() {
+            if (isGameOver) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Parallax background would go here if using images
+            // For now, a simple gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#000033'); // Night sky
+            gradient.addColorStop(0.5, '#ff8c00'); // Sunset orange
+            gradient.addColorStop(1, '#ffae42'); // Lighter orange
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            drawGround();
+
+            player.update();
+            handleObstacles();
+            handleTokens();
+
+            // Increase difficulty
+            if (gameFrame % 200 === 0 && gameSpeed < 10) {
+                 gameSpeed += 0.2;
+            }
+
+            gameFrame++;
+            requestAnimationFrame(animate);
+        }
+
+        // --- Game State Control ---
+        function resetGame() {
+            player.y = player.groundY;
+            player.velocityY = 0;
+            obstacles = [];
+            tokens = [];
+            score = 0;
+            gameSpeed = 3;
+            gameFrame = 0;
+            scoreEl.textContent = score;
+        }
+
+        function startGame() {
+            // Initialize audio on user interaction
+            if (!audioReady) {
+                Tone.start();
+                Tone.Transport.start();
+                backgroundMusic.start(0);
+                audioReady = true;
+            }
+            
+            resetGame();
+            isGameOver = false;
+            modal.style.display = 'none';
+            animate();
+        }
+        
+        function endGame(title) {
+            isGameOver = true;
+            if(audioReady) {
+                if(title.includes("Win")){
+                    collectSound.triggerAttackRelease('G6', '0.5s');
+                } else {
+                    gameOverSound.triggerAttackRelease('C3', '1s');
+                }
+            }
+
+            modalTitle.textContent = title;
+            if(title.includes("Win")){
+                 modalText.textContent = `Congratulations! You collected all ${WINNING_SCORE} tokens!`;
+            } else {
+                 modalText.textContent = `Your final score is ${score}. Try again!`;
+            }
+            
+            startGameBtn.textContent = 'Restart Game';
+            modal.style.display = 'flex';
+        }
+
+        // --- Event Listeners ---
+        startGameBtn.addEventListener('click', startGame);
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                 if(isGameOver) startGame();
+                 else player.jump();
+            }
+        });
+        
+        gameContainer.addEventListener('mousedown', () => {
+             if(isGameOver) startGame();
+             else player.jump();
+        });
+
+        gameContainer.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // prevent zoom and other default actions
+            if(isGameOver) startGame();
+            else player.jump();
+        }, { passive: false });
+
+    </script>
+</body>
+</html>
